@@ -10,6 +10,24 @@ canvas { display: block; }
 #score, #gameOver { position: absolute; top: 10px; left: 10px; color: white; font-size: 20px; }
 #gameOver { display: none; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; background: rgba(0,0,0,0.7); padding: 20px; border-radius: 10px; }
 #playAgain { margin-top: 20px; padding: 10px 20px; font-size: 18px; cursor: pointer; }
+
+#controls {
+    position: absolute;
+    bottom: 10px;
+    width: 100%;
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+}
+button.control-btn {
+    width: 50px;
+    height: 50px;
+    border: none;
+    border-radius: 25px;
+    background-color: rgba(255, 255, 255, 0.7);
+    font-size: 24px;
+    cursor: pointer;
+}
 </style>
 </head>
 <body>
@@ -18,6 +36,11 @@ canvas { display: block; }
 <h2>Game Over!</h2>
 <p>Your score: <span id="finalScore"></span></p>
 <button id="playAgain">Play Again</button>
+</div>
+<div id="controls">
+    <button id="leftBtn" class="control-btn">&#8592;</button>
+    <button id="upBtn" class="control-btn">&#8593;</button>
+    <button id="rightBtn" class="control-btn">&#8594;</button>
 </div>
 <script type="importmap">
 {
@@ -93,6 +116,10 @@ physicsWorker.onmessage = function(e) {
             
             document.addEventListener('keydown', onKeyDown);
             document.getElementById('playAgain').addEventListener('click', restartGame);
+            document.getElementById('leftBtn').addEventListener('click', () => moveLeft());
+            document.getElementById('upBtn').addEventListener('click', () => jump());
+            document.getElementById('rightBtn').addEventListener('click', () => moveRight());
+
         }
 
         function initEnvironment() {
