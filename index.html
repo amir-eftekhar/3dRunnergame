@@ -121,7 +121,17 @@ physicsWorker.onmessage = function(e) {
             document.getElementById('rightBtn').addEventListener('click', () => moveRight());
 
         }
-
+        function moveLeft() {
+            if (player.position.x > -4) {
+                player.position.x -= 2;
+            }
+        }
+        
+        function moveRight() {
+            if (player.position.x < 4) {
+                player.position.x += 2;
+            }
+        }
         function initEnvironment() {
             for (let i = 0; i < GAME_DEPTH / TILE_SIZE; i++) {
                 createFloorTile(i * TILE_SIZE);
