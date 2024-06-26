@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Enhanced 3D Infinite Runner Game</title>
+<style>
+body { margin: 0; overflow: hidden; font-family: Arial, sans-serif; }
+canvas { display: block; }
+#score, #gameOver { position: absolute; top: 10px; left: 10px; color: white; font-size: 20px; }
+#gameOver { display: none; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; background: rgba(0,0,0,0.7); padding: 20px; border-radius: 10px; }
+#playAgain { margin-top: 20px; padding: 10px 20px; font-size: 18px; cursor: pointer; }
+</style>
+</head>
+<body>
+<div id="score">Score: 0</div>
+<div id="gameOver">
+<h2>Game Over!</h2>
+<p>Your score: <span id="finalScore"></span></p>
+<button id="playAgain">Play Again</button>
+</div>
+<script type="importmap">
+{
+"imports": {
+"three": "https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.module.js"
+}
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+
+let scene, camera, renderer, player, obstacles, coins, score, gameActive;
+let playerStates, currentState;
+let leftLeg, rightLeg, legAngle = 0;
+let floorTiles = [], wallSections = [];
+const TILE_SIZE = 10, GAME_DEPTH = 100;
+let playerSpeed = 0.5;
+let isJumping = false;
+
+// Create a Web Worker for physics calculations
+const physicsWorker = new Worker(URL.createObjectURL(new Blob([`
+    self.onmessage = function(e) {
+        const { type, data } = e.data;
+        if (type === 'updatePhysics') {
+            // Perform physics calculations here
+            const updatedData = performPhysics(data);
+            self.postMessage({ type: 'physicsUpdated', data: updatedData });
+        }
+    };
+
+    function performPhysics(data) {
+        // Simulate physics calculations
+        data.playerPosition.z -= data.playerSpeed;
+        return data;
+    }
+`], {type: 'application/javascript'})));
+
+physicsWorker.onmessage = function(e) {
+    const { type, data } = e.data;
+    if (type === 'physicsUpdated') {
+        updateGameState(data);
+    }
+};
+        function init() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 5, 10);
+            camera.lookAt(0, 0, 0);
+            
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            document.body.appendChild(renderer.domElement);
+            
+            // Lighting
+            const ambientLight = new THREE.AmbientLight(0x404040);
+            scene.add(ambientLight);
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
+            directionalLight.position.set(0, 10, 5);
+            directionalLight.castShadow = true;
+            scene.add(directionalLight);
+            
+            // Initialize environment
+            initEnvironment();
+            
+            // Player
+            createPlayer();
+            
+            obstacles = [];
+            coins = [];
+            score = 0;
+            gameActive = true;
+            
+            document.addEventListener('keydown', onKeyDown);
+            document.getElementById('playAgain').addEventListener('click', restartGame);
+        }
+
+        function initEnvironment() {
+            for (let i = 0; i < GAME_DEPTH / TILE_SIZE; i++) {
+                createFloorTile(i * TILE_SIZE);
+                createWallSection(i * TILE_SIZE);
+            }
+        }
+
+        function createFloorTile(z) {
+            const geometry = new THREE.PlaneGeometry(10, TILE_SIZE);
+            const material = new THREE.MeshStandardMaterial({ color: 0xcccccc });
+            const tile = new THREE.Mesh(geometry, material);
+            tile.rotation.x = -Math.PI / 2;
+            tile.position.set(0, -1, z - TILE_SIZE / 2);
+            tile.receiveShadow = true;
+            scene.add(tile);
+            floorTiles.push(tile);
+        }
+
+        function createWallSection(z) {
+            const geometry = new THREE.BoxGeometry(1, 5, TILE_SIZE);
+            const material = new THREE.MeshStandardMaterial({ color: 0x8888ff });
+            const leftWall = new THREE.Mesh(geometry, material);
+            leftWall.position.set(-5.5, 1.5, z - TILE_SIZE / 2);
+            leftWall.castShadow = true;
+            leftWall.receiveShadow = true;
+            scene.add(leftWall);
+            const rightWall = leftWall.clone();
+            rightWall.position.x = 5.5;
+            scene.add(rightWall);
+            wallSections.push({ left: leftWall, right: rightWall });
+        }
+
+        function createPlayer() {
+            playerStates = {
+                normal: new THREE.Group(),
+                jumping: new THREE.Group(),
+                sliding: new THREE.Group()
+            };
+            
+            // Create body
+            const bodyGeometry = new THREE.BoxGeometry(1, 1.5, 1);
+            const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0x3498db });
+            const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+            body.position.y = 0.75;
+            body.castShadow = true;
+            
+            // Create head
+            const headGeometry = new THREE.SphereGeometry(0.5, 32, 32);
+            const headMaterial = new THREE.MeshStandardMaterial({ color: 0xe74c3c });
+            const head = new THREE.Mesh(headGeometry, headMaterial);
+            head.position.y = 2;
+            head.castShadow = true;
+            
+            // Create legs
+            const legGeometry = new THREE.BoxGeometry(0.4, 0.7, 0.4);
+            const legMaterial = new THREE.MeshStandardMaterial({ color: 0x3498db });
+            leftLeg = new THREE.Mesh(legGeometry, legMaterial);
+            leftLeg.position.set(-0.3, -0.65, 0);
+            leftLeg.castShadow = true;
+            rightLeg = leftLeg.clone();
+            rightLeg.position.x = 0.3;
+            
+            // Add parts to normal state
+            playerStates.normal.add(body, head, leftLeg, rightLeg);
+            
+            // Create jumping state (scaled vertically)
+            playerStates.jumping = playerStates.normal.clone();
+            playerStates.jumping.scale.y = 1.2;
+            
+            // Create sliding state (scaled horizontally and flattened)
+            playerStates.sliding = playerStates.normal.clone();
+            playerStates.sliding.scale.set(1.2, 0.5, 1);
+            
+            currentState = 'normal';
+            player = playerStates[currentState];
+            scene.add(player);
+        }
+
+        function createObstacle(z) {
+            const geometry = new THREE.BoxGeometry(2, 2, 2);
+            const material = new THREE.MeshStandardMaterial({ color: 0xff0000 });
+            const obstacle = new THREE.Mesh(geometry, material);
+            obstacle.position.set(Math.random() * 8 - 4, 0, z);
+            obstacle.castShadow = true;
+            obstacle.receiveShadow = true;
+            scene.add(obstacle);
+            obstacles.push(obstacle);
+        }
+
+        function createCoin(z) {
+            const geometry = new THREE.CylinderGeometry(0.5, 0.5, 0.2, 32);
+            const material = new THREE.MeshStandardMaterial({ color: 0xffd700 });
+            const coin = new THREE.Mesh(geometry, material);
+            coin.position.set(Math.random() * 8 - 4, 1, z);
+            coin.rotation.x = Math.PI / 2;
+            coin.castShadow = true;
+            scene.add(coin);
+            coins.push(coin);
+        }
+
+        function onKeyDown(event) {
+            if (!gameActive) return;
+            switch(event.keyCode) {
+                case 37: // Left arrow
+                    if (player.position.x > -4) player.position.x -= 2;
+                    break;
+                case 39: // Right arrow
+                    if (player.position.x < 4) player.position.x += 2;
+                    break;
+                case 38: // Up arrow (jump)
+                    if (currentState === 'normal' && !isJumping) {
+                        jump();
+                    }
+                    break;
+                case 40: // Down arrow (slide)
+                    if (currentState === 'normal') {
+                        slide();
+                    }
+                    break;
+            }
+        }
+
+let jumpVelocity = 0;
+const GRAVITY = -0.01;
+const JUMP_FORCE = 0.25;
+
+function jump() {
+    if (isJumping) return;
+    isJumping = true;
+    jumpVelocity = JUMP_FORCE;
+}
+
+
+function updatePlayerPosition() {
+    if (isJumping) {
+        // Only update the y-position during the jump
+        player.position.y += jumpVelocity;
+        jumpVelocity += GRAVITY;
+
+        if (player.position.y <= 0) {
+            player.position.y = 0;
+            isJumping = false;
+        }
+    }
+}
+
+
+
+
+function slide() {
+    if (currentState === 'normal') {
+        isSliding = true;
+        changePlayerState('sliding');
+        setTimeout(() => {
+            isSliding = false;
+            changePlayerState('normal');
+        }, 500);
+    }
+}
+
+
+        function updateGameState(data) {
+            player.position.z = data.playerPosition.z;
+            camera.position.z = player.position.z + 10;
+        }
+
+        function changePlayerState(newState) {
+            if (currentState !== newState) {
+                scene.remove(player);
+                currentState = newState;
+                player = playerStates[currentState];
+                scene.add(player);
+            }
+        }
+        
+
+        function updateEnvironment() {
+            const playerZ = player.position.z;
+        
+            // Update floor tiles
+            for (let i = floorTiles.length - 1; i >= 0; i--) {
+                if (floorTiles[i].position.z > playerZ + 10) {
+                    scene.remove(floorTiles[i]);
+                    floorTiles.splice(i, 1);
+                }
+            }
+            if (floorTiles[floorTiles.length - 1].position.z > playerZ - GAME_DEPTH) {
+                createFloorTile(playerZ - GAME_DEPTH);
+            }
+        
+            // Update wall sections
+            for (let i = wallSections.length - 1; i >= 0; i--) {
+                if (wallSections[i].left.position.z > playerZ + 10) {
+                    scene.remove(wallSections[i].left);
+                    scene.remove(wallSections[i].right);
+                    wallSections.splice(i, 1);
+                }
+            }
+            if (wallSections[wallSections.length - 1].left.position.z > playerZ - (GAME_DEPTH - TILE_SIZE)) {
+                createWallSection(playerZ - (GAME_DEPTH - TILE_SIZE));
+            }
+        
+            // Update obstacles
+            for (let i = obstacles.length - 1; i >= 0; i--) {
+                if (obstacles[i].position.z > playerZ + 10) {
+                    scene.remove(obstacles[i]);
+                    obstacles.splice(i, 1);
+                    score++;
+                    updateScoreDisplay();
+                }
+            }
+            if (obstacles.length < 5 && Math.random() < 0.05) {
+                createObstacle(playerZ - GAME_DEPTH);
+            }
+        
+            // Update coins
+            for (let i = coins.length - 1; i >= 0; i--) {
+                if (coins[i].position.z > playerZ + 10) {
+                    scene.remove(coins[i]);
+                    coins.splice(i, 1);
+                }
+            }
+            if (coins.length < 5 && Math.random() < 0.05) {
+                createCoin(playerZ - GAME_DEPTH);
+            }
+        }
+        
+
+        function checkCollisions() {
+            const playerBox = new THREE.Box3().setFromObject(player);
+            
+            obstacles.forEach(obstacle => {
+                const obstacleBox = new THREE.Box3().setFromObject(obstacle);
+                if (playerBox.intersectsBox(obstacleBox)) {
+                    gameOver();
+                }
+            });
+            
+            coins.forEach((coin, index) => {
+                const coinBox = new THREE.Box3().setFromObject(coin);
+                if (playerBox.intersectsBox(coinBox)) {
+                    scene.remove(coin);
+                    coins.splice(index, 1);
+                    score += 5;
+                    updateScoreDisplay();
+                }
+            });
+        }
+
+        function updateScoreDisplay() {
+            document.getElementById('score').textContent = `Score: ${score}`;
+        }
+
+        function gameOver() {
+            gameActive = false;
+            document.getElementById('gameOver').style.display = 'block';
+            document.getElementById('finalScore').textContent = score;
+        }
+
+        function restartGame() {
+            location.reload();
+        }
+        
+        function animateLegs() {
+            legAngle += 0.2;
+            leftLeg.position.z = Math.sin(legAngle) * 0.5;
+            rightLeg.position.z = Math.sin(legAngle + Math.PI) * 0.5;
+        }
+
+function animate() {
+    requestAnimationFrame(animate);
+    if (gameActive) {
+        // Use Web Worker for physics calculations
+        physicsWorker.postMessage({
+            type: 'updatePhysics',
+            data: {
+                playerPosition: player.position,
+                playerSpeed: playerSpeed
+            }
+        });
+
+        // Update player position (including jump)
+        updatePlayerPosition();
+
+        // Move player forward
+        player.position.z -= playerSpeed;
+        camera.position.z = player.position.z + 10;
+
+        // Animate legs
+        if (currentState === 'normal') {
+            animateLegs();
+        }
+
+        updateEnvironment();
+        checkCollisions();
+    }
+    renderer.render(scene, camera);
+}
+
+        
+        init();
+        animate();
+    </script>
+</body>
+</html>
